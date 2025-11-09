@@ -1,0 +1,119 @@
+# Configuration file for GAUSS experiments
+# Based on the paper: GAUSS: GrAph-customized Universal Self-Supervised Learning (WWW 2024)
+
+# Dataset configurations
+datasets:
+  # Homophilic datasets
+  Cora:
+    num_blocks: 2
+    lambda_param: 10.0
+    gamma: 1.0
+    hidden_dim: 256
+    lr: 0.01
+    dropout: 0.5
+    
+  CiteSeer:
+    num_blocks: 3
+    lambda_param: 10.0
+    gamma: 1.0
+    hidden_dim: 256
+    lr: 0.01
+    dropout: 0.5
+    
+  PubMed:
+    num_blocks: 2
+    lambda_param: 10.0
+    gamma: 1.0
+    hidden_dim: 256
+    lr: 0.01
+    dropout: 0.5
+  
+  WikiCS:
+    num_blocks: 3
+    lambda_param: 10.0
+    gamma: 1.0
+    hidden_dim: 256
+    lr: 0.01
+    dropout: 0.4
+    
+  Computers:
+    num_blocks: 3
+    lambda_param: 10.0
+    gamma: 1.0
+    hidden_dim: 256
+    lr: 0.01
+    dropout: 0.5
+    
+  Photo:
+    num_blocks: 2
+    lambda_param: 10.0
+    gamma: 1.0
+    hidden_dim: 256
+    lr: 0.01
+    dropout: 0.5
+  
+  # Heterophilic datasets
+  Chameleon:
+    num_blocks: 4
+    lambda_param: 10.0
+    gamma: 1.0
+    hidden_dim: 256
+    lr: 0.01
+    dropout: 0.5
+    
+  Squirrel:
+    num_blocks: 4
+    lambda_param: 10.0
+    gamma: 1.0
+    hidden_dim: 256
+    lr: 0.01
+    dropout: 0.5
+    
+  Actor:
+    num_blocks: 3
+    lambda_param: 10.0
+    gamma: 1.0
+    hidden_dim: 256
+    lr: 0.01
+    dropout: 0.5
+    
+  Cornell:
+    num_blocks: 3
+    lambda_param: 10.0
+    gamma: 1.0
+    hidden_dim: 256
+    lr: 0.01
+    dropout: 0.3
+    
+  Texas:
+    num_blocks: 3
+    lambda_param: 10.0
+    gamma: 1.0
+    hidden_dim: 256
+    lr: 0.01
+    dropout: 0.3
+    
+  Wisconsin:
+    num_blocks: 3
+    lambda_param: 10.0
+    gamma: 1.0
+    hidden_dim: 256
+    lr: 0.01
+    dropout: 0.3
+
+# Training configurations
+training:
+  epochs: 500
+  patience: 200
+  weight_decay: 0.0005
+  max_iter: 20
+  print_every: 50
+
+# Data split configurations
+data_split:
+  homophilic:
+    train_ratio: 0.1
+    val_ratio: 0.1
+  heterophilic:
+    train_ratio: 0.48
+    val_ratio: 0.32
