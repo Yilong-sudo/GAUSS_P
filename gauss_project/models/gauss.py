@@ -1,13 +1,12 @@
 """
 GAUSS: GrAph-customized Universal Self-Supervised Learning
 Implementation based on the WWW 2024 paper
+GPU-Accelerated Version
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
-from scipy.linalg import eigh
 from typing import Optional, Tuple
 
 
@@ -15,6 +14,7 @@ class GAUSS(nn.Module):
     """
     GAUSS Model: GrAph-customized Universal Self-Supervised Learning
     
+    Fully GPU-accelerated implementation using PyTorch.
     The main idea is to replace global parameters with locally learnable propagation
     by exploiting local attribute distribution.
     """
@@ -95,49 +95,47 @@ class GAUSS(nn.Module):
         
         return ego_nodes
     
-    def compute_laplacian(self, B: np.ndarray) -> np.ndarray:
+    def compute_laplacian(self, B: torch.Tensor) -> torch.Tensor:
         """
-        Compute Laplacian matrix from affinity matrix B.
+        Compute Laplacian matrix from affinity matrix B (GPU-accelerated).
         
         Args:
-            B: Affinity matrix
+            B: Affinity matrix [n, n] on GPU
             
         Returns:
-            L: Laplacian matrix
+            L: Laplacian matrix [n, n] on GPU
         """
         # Ensure B is symmetric
         B = (B + B.T) / 2
-        B = np.maximum(B, 0)  # Ensure non-negative
+        B = torch.clamp(B, min=0)  # Ensure non-negative
         
         # Compute degree matrix
-        D = np.diag(B.sum(axis=1))
+        D = torch.diag(B.sum(dim=1))
         
         # Laplacian matrix
         L = D - B
         
         return L
     
-    def update_W(self, B: np.ndarray, k: int) -> np.ndarray:
+    def update_W(self, B: torch.Tensor, k: int) -> torch.Tensor:
         """
-        Update W by solving Eq. (14) in the paper.
+        Update W by solving Eq. (14) in the paper (GPU-accelerated).
         
         Args:
-            B: Current affinity matrix
+            B: Current affinity matrix [n, n] on GPU
             k: Number of blocks
             
         Returns:
-            W: Updated W matrix
+            W: Updated W matrix [n, n] on GPU
         """
-        n = B.shape[0]
-        
         # Compute Laplacian
         L = self.compute_laplacian(B)
         
-        # Compute eigenvalues and eigenvectors
-        eigenvalues, eigenvectors = eigh(L)
+        # Compute eigenvalues and eigenvectors on GPU
+        eigenvalues, eigenvectors = torch.linalg.eigh(L)
         
         # Select k smallest eigenvalues
-        indices = np.argsort(eigenvalues)[:k]
+        indices = torch.argsort(eigenvalues)[:k]
         U = eigenvectors[:, indices]
         
         # W = UU^T
@@ -145,117 +143,93 @@ class GAUSS(nn.Module):
         
         return W
     
-    def update_Z(self, X: np.ndarray, B: np.ndarray, lambda_param: float) -> np.ndarray:
+    def update_Z(self, X: torch.Tensor, B: torch.Tensor, lambda_param: float) -> torch.Tensor:
         """
-        Update Z by solving Eq. (15) in the paper.
+        Update Z by solving Eq. (15) in the paper (GPU-accelerated).
         
         Args:
-            X: Node features [n, F]
-            B: Current affinity matrix [n, n]
+            X: Node features [n, F] on GPU
+            B: Current affinity matrix [n, n] on GPU
             lambda_param: Lambda parameter
             
         Returns:
-            Z: Updated Z matrix [n, n]
+            Z: Updated Z matrix [n, n] on GPU
         """
         n = X.shape[0]
         
-        # Based on: min ||X - XZ||^2 + lambda ||Z - B||^2
-        # Solution: Z = (X^T X + λI)^(-1) (X^T X + λB)
-        # But X^T X is (F, F) and B is (n, n), so we use the correct formulation:
-        # Z = (I + λI)^(-1) (I + λB) is incorrect
-        # Correct: (X^T X)Z = X^T X + λ(Z - B) => (X^T X + λI)Z = X^T X + λB
-        # But dimensions don't match. Let's use the direct solution for self-expressive learning:
-        # min ||X - XZ||^2 + lambda ||Z - B||^2
-        # Taking derivative: -2X^T(X - XZ) + 2λ(Z - B) = 0
-        # X^T X - X^T XZ + λZ - λB = 0
-        # (X^T X + λI)Z = X^T X + λB
-        # This requires Z to be (F, n) not (n, n)
-        # 
-        # For self-representative learning, the correct form is:
-        # Z = (X^T X + λI)^(-1) (X^T X + λB)
-        # where both sides should have compatible dimensions
-        # Actually, for Xi = Xi * Bi, we have:
-        # min_Z ||Xi - Xi*Z||_F^2 s.t. ...
-        # The solution is: Z = (Xi^T Xi + λI)^(-1) (Xi^T Xi + λB)
-        # Xi is (n, F), Xi^T Xi is (F, F), but we need Z to be (n, n)
-        #
-        # Correct formulation for self-expressive: min ||X - XZ||^2 where X is (n, F) and Z is (n, n)
-        # This means each row of X is represented by a linear combination of all rows
-        # Taking derivative w.r.t. Z: -2X^T(X - XZ) + 2λ(Z - B) = 0
-        # But X^T X is (F, F) and Z is (n, n) - dimension mismatch!
-        #
-        # The correct form should be row-wise: for each sample xi, solve xi = X * zi
-        # Or use: Z = (XX^T + λI)^(-1) (XX^T + λB) where XX^T is (n, n)
+        # For self-expressive learning: min ||X - XZ||^2 + lambda ||Z - B||^2
+        # Solution: Z = (XX^T + λI)^(-1) (XX^T + λB) where XX^T is (n, n)
         
-        I = np.eye(n)
+        I = torch.eye(n, device=self.device)
         XXT = X @ X.T  # (n, n)
         
         try:
-            Z = np.linalg.solve(XXT + lambda_param * I, XXT + lambda_param * B)
-        except np.linalg.LinAlgError:
+            # Use torch.linalg.solve for GPU acceleration
+            Z = torch.linalg.solve(XXT + lambda_param * I, XXT + lambda_param * B)
+        except RuntimeError:
             # If singular, use pseudo-inverse
-            Z = np.linalg.pinv(XXT + lambda_param * I) @ (XXT + lambda_param * B)
+            Z = torch.linalg.pinv(XXT + lambda_param * I) @ (XXT + lambda_param * B)
         
         return Z
     
-    def update_B(self, Z: np.ndarray, W: np.ndarray, lambda_param: float, gamma: float) -> np.ndarray:
+    def update_B(self, Z: torch.Tensor, W: torch.Tensor, lambda_param: float, gamma: float) -> torch.Tensor:
         """
-        Update B by solving Eq. (16) in the paper.
+        Update B by solving Eq. (16) in the paper (GPU-accelerated).
         
         Based on Proposition A.2 in the paper's appendix:
         The solution to min (1/2)||B - A||^2 s.t. diag(B)=0, B>=0, B=B^T
         where A = Z - (γ/λ) * (diag(W)1^T - W)
         
         Args:
-            Z: Current Z matrix [n, n]
-            W: Current W matrix [n, n]
+            Z: Current Z matrix [n, n] on GPU
+            W: Current W matrix [n, n] on GPU
             lambda_param: Lambda parameter
             gamma: Gamma parameter
             
         Returns:
-            B: Updated B matrix [n, n]
+            B: Updated B matrix [n, n] on GPU
         """
         n = Z.shape[0]
         
         # According to Eq. (16) and the optimization derivation in Appendix A,
         # the correct formula is: A = Z - (γ/λ) * (diag(W)1^T - W)
         # Note the NEGATIVE sign (minus, not plus)
-        diag_w = np.diag(W)  # Extract diagonal as vector (n,)
-        diag_w_matrix = np.outer(diag_w, np.ones(n))  # (n, n) matrix
+        diag_w = torch.diag(W)  # Extract diagonal as vector (n,)
+        diag_w_matrix = torch.outer(diag_w, torch.ones(n, device=self.device))  # (n, n) matrix
         A = Z - (gamma / lambda_param) * (diag_w_matrix - W)  # CORRECTED: minus sign
         
         # Remove diagonal: Â = A - diag(diag(A))
-        A_hat = A - np.diag(np.diag(A))
+        A_hat = A - torch.diag(torch.diag(A))
         
         # Make symmetric and non-negative: B = [(Â + Â^T)/2]_+
         B = (A_hat + A_hat.T) / 2
-        B = np.maximum(B, 0)
+        B = torch.clamp(B, min=0)
         
         # Set diagonal to 0 (enforce diag(B) = 0 constraint)
-        np.fill_diagonal(B, 0)
+        B.fill_diagonal_(0)
         
         return B
     
     def learn_affinity_matrix(self, X: torch.Tensor, ego_nodes: torch.Tensor) -> torch.Tensor:
         """
-        Learn affinity matrix for an ego-network using Algorithm 1 from the paper.
+        Learn affinity matrix for an ego-network using Algorithm 1 from the paper (GPU-accelerated).
         
         Args:
-            X: Full node features [num_nodes, num_features]
+            X: Full node features [num_nodes, num_features] on GPU
             ego_nodes: Indices of nodes in the ego-network
             
         Returns:
-            B: Learned affinity matrix
+            B: Learned affinity matrix [n_ego, n_ego] on GPU
         """
-        # Extract features for ego-network
-        X_ego = X[ego_nodes].cpu().numpy()
+        # Extract features for ego-network (keep on GPU)
+        X_ego = X[ego_nodes]  # [n_ego, F]
         n = X_ego.shape[0]
         
-        # Initialize
-        Z = np.eye(n)
-        B = np.eye(n)
+        # Initialize on GPU
+        Z = torch.eye(n, device=self.device)
+        B = torch.eye(n, device=self.device)
         
-        # Alternating optimization
+        # Alternating optimization (all on GPU)
         for iteration in range(self.max_iter):
             # Update W
             W = self.update_W(B, self.num_blocks)
@@ -267,13 +241,13 @@ class GAUSS(nn.Module):
             B_new = self.update_B(Z, W, self.lambda_param, self.gamma)
             
             # Check convergence
-            if np.linalg.norm(B_new - B, 'fro') < 1e-4:
+            if torch.linalg.norm(B_new - B, 'fro') < 1e-4:
                 B = B_new
                 break
             
             B = B_new
         
-        return torch.from_numpy(B).float().to(self.device)
+        return B  # Already on GPU
     
     def propagate_ego_network(self, X: torch.Tensor, B: torch.Tensor, ego_nodes: torch.Tensor) -> torch.Tensor:
         """
