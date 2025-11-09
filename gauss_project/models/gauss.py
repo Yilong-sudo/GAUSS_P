@@ -202,6 +202,10 @@ class GAUSS(nn.Module):
         """
         Update B by solving Eq. (16) in the paper.
         
+        Based on Proposition A.2 in the paper's appendix:
+        The solution to min (1/2)||B - A||^2 s.t. diag(B)=0, B>=0, B=B^T
+        where A = Z - (γ/λ) * (diag(W)1^T - W)
+        
         Args:
             Z: Current Z matrix [n, n]
             W: Current W matrix [n, n]
@@ -213,21 +217,21 @@ class GAUSS(nn.Module):
         """
         n = Z.shape[0]
         
-        # A = Z + (γ/λ) * (diag(W)1^T - W)
-        # diag(W) is a vector of diagonal elements
-        # diag(W)1^T creates a matrix where each column is diag(W)
+        # According to Eq. (16) and the optimization derivation in Appendix A,
+        # the correct formula is: A = Z - (γ/λ) * (diag(W)1^T - W)
+        # Note the NEGATIVE sign (minus, not plus)
         diag_w = np.diag(W)  # Extract diagonal as vector (n,)
         diag_w_matrix = np.outer(diag_w, np.ones(n))  # (n, n) matrix
-        A = Z + (gamma / lambda_param) * (diag_w_matrix - W)
+        A = Z - (gamma / lambda_param) * (diag_w_matrix - W)  # CORRECTED: minus sign
         
-        # Remove diagonal
+        # Remove diagonal: Â = A - diag(diag(A))
         A_hat = A - np.diag(np.diag(A))
         
-        # Make symmetric and non-negative
+        # Make symmetric and non-negative: B = [(Â + Â^T)/2]_+
         B = (A_hat + A_hat.T) / 2
         B = np.maximum(B, 0)
         
-        # Set diagonal to 0
+        # Set diagonal to 0 (enforce diag(B) = 0 constraint)
         np.fill_diagonal(B, 0)
         
         return B
@@ -302,35 +306,36 @@ class GAUSS(nn.Module):
         """
         Forward pass of GAUSS.
         
+        CRITICAL: Both training and testing MUST use the same GAUSS propagation.
+        The difference is only whether we update the MLP parameters.
+        
         Args:
             X: Node features [num_nodes, num_features]
             edge_index: Edge index [2, num_edges]
-            train_mode: Whether in training mode (learn affinity matrices)
+            train_mode: Not used anymore - kept for API compatibility
+                       GAUSS propagation is ALWAYS performed
             
         Returns:
-            out: Node representations or logits
+            out: Node logits after GAUSS propagation and MLP
         """
         num_nodes = X.shape[0]
         
-        if train_mode:
-            # Learn representations for all nodes
-            H_all = []
+        # ALWAYS perform GAUSS propagation (both training and testing)
+        # This ensures train/test consistency
+        H_all = []
+        
+        for node_idx in range(num_nodes):
+            # Construct ego-network
+            ego_nodes = self.construct_ego_network(edge_index, num_nodes, node_idx)
             
-            for node_idx in range(num_nodes):
-                # Construct ego-network
-                ego_nodes = self.construct_ego_network(edge_index, num_nodes, node_idx)
-                
-                # Learn affinity matrix
-                B = self.learn_affinity_matrix(X, ego_nodes)
-                
-                # Propagate in ego-network
-                h = self.propagate_ego_network(X, B, ego_nodes)
-                H_all.append(h)
+            # Learn affinity matrix
+            B = self.learn_affinity_matrix(X, ego_nodes)
             
-            H = torch.stack(H_all, dim=0)
-        else:
-            # In inference mode, use the original features
-            H = X
+            # Propagate in ego-network
+            h = self.propagate_ego_network(X, B, ego_nodes)
+            H_all.append(h)
+        
+        H = torch.stack(H_all, dim=0)
         
         # Apply MLP
         out = self.mlp(H)

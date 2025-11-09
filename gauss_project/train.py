@@ -34,8 +34,8 @@ def train_epoch(model, data, optimizer, device):
     model.train()
     optimizer.zero_grad()
     
-    # Forward pass
-    out = model(data.x.to(device), data.edge_index.to(device), train_mode=True)
+    # Forward pass (GAUSS propagation is always performed)
+    out = model(data.x.to(device), data.edge_index.to(device))
     
     # Compute loss on training nodes
     loss = F.cross_entropy(out[data.train_mask], data.y[data.train_mask].to(device))
@@ -67,8 +67,8 @@ def evaluate(model, data, device, mask_name='val'):
     """
     model.eval()
     
-    # Forward pass
-    out = model(data.x.to(device), data.edge_index.to(device), train_mode=False)
+    # Forward pass (GAUSS propagation is always performed, same as training)
+    out = model(data.x.to(device), data.edge_index.to(device))
     
     # Get mask
     if mask_name == 'val':
